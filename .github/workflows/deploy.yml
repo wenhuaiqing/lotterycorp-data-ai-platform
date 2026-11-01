@@ -1,0 +1,67 @@
+# Build + push both images to GHCR on every push to main. The container
+# app is created and rolled from Azure Cloud Shell with infra-azure/tlc
+# (see its README), so there is no cloud credential in this repository.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "scripts/**"
+      - "infra-azure/artefacts.sha256"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image names (lowercase, sha-pinned)
+        id: meta
+        run: |
+          REPO_LC=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "backend_image=ghcr.io/${REPO_LC}/backend:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "frontend_image=ghcr.io/${REPO_LC}/frontend:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "backend_latest=ghcr.io/${REPO_LC}/backend:latest" >> "$GITHUB_OUTPUT"
+          echo "frontend_latest=ghcr.io/${REPO_LC}/frontend:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Build + push backend
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.backend_image }}
+            ${{ steps.meta.outputs.backend_latest }}
+
+      - name: Build + push frontend
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.frontend_image }}
+            ${{ steps.meta.outputs.frontend_latest }}
+
+      - name: Print images
+        run: |
+          echo "${{ steps.meta.outputs.backend_image }}"
+          echo "${{ steps.meta.outputs.frontend_image }}"

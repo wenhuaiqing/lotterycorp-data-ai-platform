@@ -1,0 +1,85 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# uv
+.uv/
+
+# Node
+node_modules/
+dist/
+.vite/
+*.log
+.DS_Store
+
+# Env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Build artefacts.
+# - platform.duckdb is rebuilt on backend boot from MySQL.
+# - model.pkl + embedding parquets live in S3 (provisioned by
+#   infra/s3.tf). Backend downloads them on container boot.
+# - The regulation source docs (data/regulations/docs/*.md) ARE
+#   committed -- they're the input to build_regulation_corpus.
+data/*
+!data/.gitkeep
+!data/regulations/
+data/regulations/*
+!data/regulations/docs/
+!data/regulations/docs/**
+
+# Eval run outputs — keep the folder, ignore the timestamped JSON dumps.
+evals/results/*
+!evals/results/.gitkeep
+
+# Local-only scratch data. Never commit.
+.ignore/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Terraform local state + plugin cache.
+# State files contain secrets (the random RDS password). Never commit.
+infra/.terraform/
+infra/terraform.tfstate
+infra/terraform.tfstate.*
+infra/*.tfplan
+infra/.terraform.tfstate.lock.info
+
+# Terraform working dirs - provider binaries must never be committed
+**/.terraform/
+
+# Local secrets for terraform - never commit
+infra-azure/terraform.tfvars
+
+# Terraform state + plans hold secrets in cleartext - never commit
+*.tfstate
+*.tfstate.*
+*.tfplan
+infra-azure/tfplan
+
+# Local Claude Code skills. The demo-from-template skill carries project
+# records and interview strategy; the canonical copy lives in
+# ~/.claude/skills/ and none of it belongs in a public repo.
+.claude/

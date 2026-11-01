@@ -1,0 +1,136 @@
+"""Planner — LLM router that decides which specialist agents to invoke.
+
+Uses OpenAI structured outputs to enforce the PlannerDecision schema. Falls
+back to a keyword heuristic when no API key is configured (lets the SSE
+endpoint stay testable without credentials).
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from typing import Any
+
+from src.app.services.llm import chat_structured
+from src.app.services.agents.schemas import (
+    AgentCall,
+    AgentName,
+    GraphState,
+    PlannerDecision,
+)
+from src.settings import settings
+
+log = logging.getLogger(__name__)
+
+SYSTEM_PROMPT = """\
+You are the planner for a multi-agent real-estate assistant. Decide which of
+the following specialist agents to call. You may call zero, one, or several
+agents. Return strict JSON.
+
+For each call, `inputs_json` is a JSON-encoded STRING (not an object) holding
+the keyword arguments the agent expects. Use the exact key names below.
+
+Agents and their inputs:
+- compliance: NSW regulation Q&A (RAG + web fallback).
+    inputs_json: {"query": "<the user's question>"}
+- data_query: Natural-language analytics over DuckDB tables (properties,
+  suburbs, listings, leads).
+    inputs_json: {"question": "<the user's question>"}
+- matcher: Buyer/tenant requirement matching. Use flat keys.
+    inputs_json: {"min_bed": <int>, "max_price": <number aud>,
+                  "max_km_from_cbd": <number>, "lifestyle": "<short text>",
+                  "preferred_suburb": "<optional suburb name>"}
+- valuation: Predict a price for a described property. Use flat keys.
+    inputs_json: {"num_bed": <int>, "num_bath": <int>, "num_parking": <int>,
+                  "property_size": <sqm>, "suburb": "<name>", "type": "House|Apartment|..."}
+- listing: Draft listing copy from a property's attributes.
+    inputs_json: <same keys as valuation>
+- lead_triage: Summarise + score a CRM lead.
+    inputs_json: {"lead_id": "<id>"} or {"lead": {...full lead dict...}}
+- market_watch: Live web search.
+    inputs_json: {"query": "<focused search query>"}
+- general: Catch-all chat fallback (background agent — don't surface it
+  unprompted). Use for greetings, "what can you do?" / "how does this
+  work?" platform questions, or any property-related chat that doesn't
+  cleanly fit one of the specialists above.
+    inputs_json: {"question": "<the user's question>"}
+
+Examples:
+- "What stamp duty applies to a $900k purchase, and find me
+  family-friendly suburbs in that price range" -> call BOTH
+  compliance (the stamp-duty question) AND matcher (the suburb
+  search with max_price 900000). Compound requests get one agent
+  per distinct ask - never fold a buyer-requirements search into
+  data_query.
+- "How many sales were there in Bondi last year?" -> data_query only.
+
+Rules:
+- Return strict JSON matching the PlannerDecision schema.
+- `inputs_json` MUST be a JSON-encoded STRING. Example value:
+  "{\\"min_bed\\": 3, \\"max_price\\": 1500000}"
+- If a field is unknown, omit it. Never invent a suburb or price.
+- Pick the smallest set of agents that gets the job done.
+- NEVER return an empty agents_to_call list. If nothing else fits,
+  route to `general`.
+"""
+
+
+# Keyword rules use word-boundary regex to avoid false positives
+# (e.g. "Bondi" must not match the "bond" compliance keyword).
+_KEYWORD_RULES: list[tuple[tuple[str, ...], AgentName]] = [
+    (("stamp duty", "tenancy", "tenant rights", "rental bond", "bonds", "fair trading",
+      "firb", "strata", "underquoting", "disclosure", "cooling off",
+      "regulation", "compliance", "legal"), "compliance"),
+    (("market this week", "this week", "news", "trend", "trends", "recently",
+      "recent changes", "right now", "current", "live market"), "market_watch"),
+    (("draft listing", "write listing", "listing copy", "listing description"), "listing"),
+    (("triage", "intent score", "next action", "lead summary", "triage this lead"), "lead_triage"),
+    (("match", "find me", "looking for", "buyer", "renter", "tenant",
+      "suburbs under", "ranked suburbs"), "matcher"),
+    (("estimate", "valuation", "value of", "what's it worth", "worth",
+      "predict price", "predicted price"), "valuation"),
+    (("how many", "average", "median", "count", "top", "compare",
+      "list", "show me", "breakdown"), "data_query"),
+]
+
+
+def _matches(keyword: str, text: str) -> bool:
+    """Match a keyword as a whole word/phrase (case-insensitive)."""
+    pattern = r"\b" + re.escape(keyword) + r"\b"
+    return re.search(pattern, text, re.IGNORECASE) is not None
+
+
+def _heuristic_decision(message: str) -> PlannerDecision:
+    chosen: list[AgentName] = []
+    for keywords, agent in _KEYWORD_RULES:
+        if any(_matches(kw, message) for kw in keywords) and agent not in chosen:
+            chosen.append(agent)
+    if not chosen:
+        # No specialist matched — fall through to the general chat agent
+        # so the user always gets *some* useful response.
+        chosen = ["general"]
+    return PlannerDecision(
+        agents_to_call=[AgentCall(name=name, reasoning="heuristic match") for name in chosen],
+        reasoning="No LLM available; routed by keyword heuristic.",
+        needs_clarification=False,
+    )
+
+
+async def plan(state: GraphState) -> PlannerDecision:
+    page_ctx = state.page_context.model_dump()
+    user_payload = (
+        f"User message: {state.user_message}\n"
+        f"Page context: {page_ctx}"
+    )
+    try:
+        return chat_structured(
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_payload},
+            ],
+            response_model=PlannerDecision,
+            temperature=0,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Planner LLM call failed (%s) — falling back to heuristic", exc)
+        return _heuristic_decision(state.user_message)

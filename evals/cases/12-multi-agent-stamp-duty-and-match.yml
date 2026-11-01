@@ -1,0 +1,13 @@
+id: multi-agent-stamp-duty-and-match
+description: Compound prompt routes both Compliance and Matcher in one turn.
+prompt: "I'm buying a $900k home in NSW — what stamp duty applies, and find me family-friendly suburbs in that price range."
+expected_agents:
+  - compliance
+  - matcher
+# Exact dollar figures vary by model (case 01 learned this the hard
+# way: Claude and gpt-4o compute ~$100 apart). Assert the structural
+# fact instead: a NSW stamp-duty answer cites Revenue NSW.
+expected_facts:
+  - "Revenue NSW"
+anti_facts: []
+tier3: true

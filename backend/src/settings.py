@@ -1,0 +1,116 @@
+"""Application settings loaded from environment / .env file."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BACKEND_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = BACKEND_ROOT.parent
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=[REPO_ROOT / ".env", BACKEND_ROOT / ".env"],
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # ---- LLM + embedding providers -------------------------------------
+    # "openai" (default): any OpenAI-compatible endpoint. The deployment
+    #   uses Azure OpenAI's /openai/v1 surface (gpt-4.1-mini +
+    #   text-embedding-3-small on the demo's own Azure subscription).
+    # "bedrock": the original AWS deployment path (kept as reference;
+    #   needs AWS credentials + the boto3 extra).
+    llm_provider: str = "openai"
+    embed_provider: str = "openai"
+
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_chat_model: str = "gpt-4-1-mini"
+    llm_embed_model: str = "text-embedding-3-small"
+    embed_dim: int = 1536  # text-embedding-3-small; Titan v2 was 1024.
+    # NOTE: switching embed provider/model requires REBUILDING the RAG
+    # parquets (scripts/build_regulation_corpus.py + build_review_embeddings.py)
+    # so corpus and query vectors come from the same model.
+
+    # Embeddings may sit on a DIFFERENT endpoint to chat. The live deploy
+    # runs chat on Gemini's free tier (zero token cost) but keeps
+    # embeddings on Azure OpenAI, because moving them means rebuilding
+    # the RAG parquets and query-time embedding spend rounds to nothing.
+    # Leave both unset for a single-provider setup -- they then fall back
+    # to the llm_* values, which is the old behaviour exactly.
+    embed_base_url: str = ""
+    embed_api_key: str = ""
+
+    @property
+    def embed_endpoint(self) -> str:
+        """Base URL for embeddings; falls back to the chat endpoint."""
+        return self.embed_base_url or self.llm_base_url
+
+    @property
+    def embed_key(self) -> str:
+        """API key for embeddings; falls back to the chat key."""
+        return self.embed_api_key or self.llm_api_key
+
+    # Legacy Bedrock path (unused unless *_provider == "bedrock").
+    aws_region: str = "ap-southeast-2"
+    bedrock_chat_model: str = "au.anthropic.claude-sonnet-4-6"
+    bedrock_embed_model: str = "amazon.titan-embed-text-v2:0"
+
+    # ---- Artefact store (trained model + RAG parquets) -----------------
+    # Azure: public-read blob container base URL, e.g.
+    #   https://<account>.blob.core.windows.net/artefacts
+    # Backend downloads on boot if files are missing locally.
+    artefact_base_url: str = ""
+    # Legacy AWS path (unused on Azure).
+    s3_artefact_bucket: str = ""
+
+    # Tavily
+    tavily_api_key: str = ""
+
+    # Data paths
+    data_dir: Path = REPO_ROOT / "data"
+    model_path: Path = REPO_ROOT / "data" / "model.pkl"
+    duckdb_path: Path = REPO_ROOT / "data" / "platform.duckdb"
+
+    # MySQL (OLTP). Defaults match docker-compose.yml.
+    mysql_host: str = "127.0.0.1"
+    mysql_port: int = 3306
+    mysql_user: str = "app"
+    mysql_password: str = "app"
+    mysql_database: str = "reapit_demo"
+    # Require + verify TLS to MySQL (Azure). Off for the local docker-compose
+    # server, which only has a self-signed certificate.
+    mysql_ssl: bool = False
+
+    @property
+    def mysql_url(self) -> str:
+        return (
+            f"mysql+pymysql://{self.mysql_user}:{self.mysql_password}"
+            f"@{self.mysql_host}:{self.mysql_port}/{self.mysql_database}"
+            "?charset=utf8mb4"
+        )
+
+    # Orb abuse controls (anonymous public endpoint that fans out to LLM +
+    # Tavily calls). Sliding window, in-process - see services/rate_limit.py.
+    orb_rate_limit_per_ip: int = 20
+    orb_rate_limit_global: int = 300
+    orb_rate_limit_window_seconds: float = 300.0
+    orb_max_message_chars: int = 2000
+    orb_max_context_chars: int = 8000
+
+    # Shared secret for write endpoints + "trusted" orb runs. Fail closed:
+    # empty means writes are refused. See services/auth.py.
+    demo_write_token: str = ""
+
+    # CORS
+    cors_origins: str = "http://localhost:5173"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+
+settings = Settings()

@@ -1,0 +1,64 @@
+# Repo-root .dockerignore. Applies to all `docker build` invocations
+# from this directory (which is the context for both the backend and
+# frontend Dockerfiles).
+
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# Local secrets + env
+.env
+.env.local
+.env.*.local
+
+# Python build / cache
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+backend/.venv/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# data/ does not ship in the image (apart from regulation source docs,
+# which are tiny + needed for the build_regulation_corpus script). The
+# heavy artefacts (model.pkl, parquets) come down from S3 on boot.
+data/
+!data/regulations/
+!data/regulations/docs/
+!data/regulations/docs/**
+!data/.gitkeep
+
+# Docs / IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Claude / project tools
+.claude/
+docs/screenshots/
+docs/application/
+
+# Test outputs
+evals/results/
+htmlcov/
+.coverage
+
+# Terraform state + secrets (both stacks). Only the artefact manifest is
+# needed by the backend image; everything else stays out of the context.
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.backup
+infra/.terraform.lock.hcl
+infra-azure/.terraform/
+infra-azure/*.tfstate
+infra-azure/*.tfstate.*
+infra-azure/tfplan
+infra-azure/*.tfplan
+infra-azure/terraform.tfvars
